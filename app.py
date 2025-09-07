@@ -19,6 +19,7 @@ st.title("PPT Slide DB")
 
 tab_ingest, tab_search = st.tabs(["登録（分解＆キーワード付与）", "検索"])
 
+
 with tab_ingest:
     st.header("PPTXアップロードと分解")
     up = st.file_uploader("PowerPoint (.pptx) をアップロード", type=["pptx"])
@@ -35,7 +36,6 @@ with tab_ingest:
                 st.write(f"スライド数: {len(slides)}")
 
                 for s_num, text_content, image_blobs in slides:
-                    # save images to files
                     stored_images = []
                     for (nm, blob) in image_blobs:
                         out_path = os.path.join(IMG_DIR, nm)
@@ -46,7 +46,6 @@ with tab_ingest:
                     slide_id = insert_slide(presentation_id=pres_id, slide_number=s_num,
                                             text_content=text_content, image_filenames=stored_images)
 
-                    # Suggest candidates
                     cands = suggest_keywords(text_content, top_k=8)
 
                     with st.expander(f"スライド {s_num} のキーワード登録", expanded=False):
@@ -54,21 +53,23 @@ with tab_ingest:
                         st.code((text_content or "")[:1000])
 
                         sel = st.multiselect("候補から選択", cands, default=cands[:3], key=f"sel_{slide_id}")
-                        manual = st.text_input("手動追加（スペース区切り）", key=f"man_{slide_id}")
+                        manual = st.text_input("手動追加（スペース・カンマ・読点・セミコロン区切り）", key=f"man_{slide_id}")
 
                         if st.button(f"このスライドにキーワード保存", key=f"save_{slide_id}"):
-                            # save selected
+                            from db import list_slide_keywords, insert_keyword
                             for kw in sel:
                                 insert_keyword(slide_id, kw, source="candidate")
-                            # save manual
-                            manual_terms = [t.strip() for t in (manual or "").split() if t.strip()]
+                            import re
+                            manual_terms = re.split(r"[，、,;\s\u3000]+", manual or "")
+                            manual_terms = [t for t in [t.strip() for t in manual_terms] if t]
                             for kw in manual_terms:
                                 insert_keyword(slide_id, kw, source="manual")
                             st.success("キーワードを保存しました。")
+                            kws = list_slide_keywords(slide_id)
+                            if kws:
+                                disp = [f"{d['keyword']} ({d['source']})" for d in kws]
+                                st.write("**現在の登録キーワード**: ", ", ".join(disp))
 
-                st.info("分解とキーワード登録の準備が完了しました。必要に応じて各スライドの保存ボタンを押してください。")
-            except Exception as e:
-                st.error(f"エラー: {e}")
 
 with tab_search:
     st.header("検索")
@@ -76,51 +77,22 @@ with tab_search:
     mode = st.selectbox("検索モード", ["keywords_any（いずれか一致）", "keywords_all（すべて一致）", "keywords_like（部分一致）", "text（本文に含む）"])
     mode_key = {"keywords_any（いずれか一致）": "keywords_any",
                 "keywords_all（すべて一致）": "keywords_all",
-                "keywords_like（部分一致）": "keywords_like", "text（本文に含む）": "text"}[mode]
+                "keywords_like（部分一致）": "keywords_like",
+                "text（本文に含む）": "text"}[mode]
 
+    rows = None
     if st.button("検索する"):
-        # Normalize query terms: split by space/comma/Japanese punctuation
-        import re, unicodedata
-        def _normalize_query(qs: str):
-            qs = unicodedata.normalize("NFKC", qs or "")
-            # Replace separators with spaces
-            qs = re.sub(r"[，、,;/]+", " ", qs)
-            qs = re.sub(r"[\s\u3000]+", " ", qs)
-            return qs.strip().lower()
-
-        qn = _normalize_query(q)
-        rows = []
-        if mode_key == "keywords_like":
-            # manual LIKE query
-            import sqlite3
-            from db import get_conn
-            terms = [t for t in qn.split(" ") if t]
-            if terms:
-                # Build AND over terms for LIKE
-                clauses = " AND ".join([f"k.keyword LIKE ?" for _ in terms])
-                with get_conn() as conn:
-                    cur = conn.cursor()
-                    cur.execute(f"""SELECT DISTINCT s.*, p.filename
-                                     FROM slides s
-                                     JOIN keywords k ON k.slide_id = s.id
-                                     JOIN presentations p ON s.presentation_id=p.id
-                                     WHERE {clauses}
-                                     ORDER BY p.filename, s.slide_number""", tuple([f"%{t}%" for t in terms]))
-                    rows = [dict(r) for r in cur.fetchall()]
-        else:
-            rows = search_slides(qn, mode=mode_key)
+        rows = search_slides(q, mode=mode_key)
 
         st.write(f"ヒット数: {len(rows)}")
+        if not rows:
+            st.caption("※ 見つからない場合は「keywords_like（部分一致）」や区切り文字（スペース/カンマ/読点）を確認してください。")
 
-if not rows:
-    st.caption("※ 見つからない場合は「keywords_like（部分一致）」や区切り文字（スペース/カンマ/読点）を確認してください。")
-for r in rows:
+        for r in rows:
             st.markdown("---")
             st.markdown(f"**ファイル**: {r.get('filename')}　**スライド**: {r.get('slide_number')}")
             st.markdown("**抜粋テキスト**")
             st.code((r.get('text_content') or "")[:1000])
-            # fetch keywords for this slide
-            import sqlite3
             from db import get_conn
             with get_conn() as conn:
                 cur = conn.cursor()
@@ -129,6 +101,4 @@ for r in rows:
             if kws:
                 disp = [f"{kw} ({src})" for kw, src in kws]
                 st.write("**登録キーワード**: ", ", ".join(disp))
-            # provide path to original file (relative)
             st.caption("※ 検索はDB内のテキストと登録キーワードに対して実行しています。元のPPTXは data/uploads/ に保存されています。")
-

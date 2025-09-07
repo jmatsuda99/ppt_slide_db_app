@@ -29,3 +29,7 @@ CREATE TABLE IF NOT EXISTS keywords (
 
 CREATE INDEX IF NOT EXISTS idx_keywords_kw ON keywords(keyword);
 CREATE INDEX IF NOT EXISTS idx_slides_text ON slides(id);
+
+
+-- Ensure no duplicate keywords per slide
+CREATE UNIQUE INDEX IF NOT EXISTS uq_keywords_slide_kw ON keywords(slide_id, keyword);
