@@ -1,7 +1,7 @@
 
 import os, io, json, shutil
 import streamlit as st
-from db import ensure_db, insert_presentation, insert_slide, insert_keyword, search_slides, list_slides_by_presentation
+from db import ensure_db, insert_presentation, insert_slide, insert_keyword, search_slides, list_slides_by_presentation, list_slide_keywords, get_conn
 from ppt_extract import extract_slide_text_and_images
 from keywording import suggest_keywords
 
@@ -18,7 +18,6 @@ st.set_page_config(page_title="PPT Slide DB", layout="wide")
 st.title("PPT Slide DB")
 
 tab_ingest, tab_search = st.tabs(["登録（分解＆キーワード付与）", "検索"])
-
 
 with tab_ingest:
     st.header("PPTXアップロードと分解")
@@ -56,20 +55,25 @@ with tab_ingest:
                         manual = st.text_input("手動追加（スペース・カンマ・読点・セミコロン区切り）", key=f"man_{slide_id}")
 
                         if st.button(f"このスライドにキーワード保存", key=f"save_{slide_id}"):
-                            from db import list_slide_keywords, insert_keyword
+                            # 候補の保存
                             for kw in sel:
                                 insert_keyword(slide_id, kw, source="candidate")
+                            # 手動キーワードの保存（各種区切り対応）
                             import re
                             manual_terms = re.split(r"[，、,;\s\u3000]+", manual or "")
                             manual_terms = [t for t in [t.strip() for t in manual_terms] if t]
                             for kw in manual_terms:
                                 insert_keyword(slide_id, kw, source="manual")
+
                             st.success("キーワードを保存しました。")
+                            # 現在の登録キーワードを表示
                             kws = list_slide_keywords(slide_id)
                             if kws:
                                 disp = [f"{d['keyword']} ({d['source']})" for d in kws]
                                 st.write("**現在の登録キーワード**: ", ", ".join(disp))
 
+            except Exception as e:
+                st.error(f"エラー: {e}")
 
 with tab_search:
     st.header("検索")
@@ -93,7 +97,7 @@ with tab_search:
             st.markdown(f"**ファイル**: {r.get('filename')}　**スライド**: {r.get('slide_number')}")
             st.markdown("**抜粋テキスト**")
             st.code((r.get('text_content') or "")[:1000])
-            from db import get_conn
+            # キーワード一覧
             with get_conn() as conn:
                 cur = conn.cursor()
                 cur.execute("SELECT keyword, source FROM keywords WHERE slide_id=? ORDER BY id ASC", (r['id'],))
