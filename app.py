@@ -73,14 +73,48 @@ with tab_ingest:
 with tab_search:
     st.header("検索")
     q = st.text_input("クエリ（スペース区切り）")
-    mode = st.selectbox("検索モード", ["keywords_any（いずれか一致）", "keywords_all（すべて一致）", "text（本文に含む）"])
+    mode = st.selectbox("検索モード", ["keywords_any（いずれか一致）", "keywords_all（すべて一致）", "keywords_like（部分一致）", "text（本文に含む）"])
     mode_key = {"keywords_any（いずれか一致）": "keywords_any",
                 "keywords_all（すべて一致）": "keywords_all",
-                "text（本文に含む）": "text"}[mode]
+                "keywords_like（部分一致）": "keywords_like", "text（本文に含む）": "text"}[mode]
+
     if st.button("検索する"):
-        rows = search_slides(q, mode=mode_key)
+        # Normalize query terms: split by space/comma/Japanese punctuation
+        import re, unicodedata
+        def _normalize_query(qs: str):
+            qs = unicodedata.normalize("NFKC", qs or "")
+            # Replace separators with spaces
+            qs = re.sub(r"[，、,;/]+", " ", qs)
+            qs = re.sub(r"[\s\u3000]+", " ", qs)
+            return qs.strip().lower()
+
+        qn = _normalize_query(q)
+        rows = []
+        if mode_key == "keywords_like":
+            # manual LIKE query
+            import sqlite3
+            from db import get_conn
+            terms = [t for t in qn.split(" ") if t]
+            if terms:
+                # Build AND over terms for LIKE
+                clauses = " AND ".join([f"k.keyword LIKE ?" for _ in terms])
+                with get_conn() as conn:
+                    cur = conn.cursor()
+                    cur.execute(f"""SELECT DISTINCT s.*, p.filename
+                                     FROM slides s
+                                     JOIN keywords k ON k.slide_id = s.id
+                                     JOIN presentations p ON s.presentation_id=p.id
+                                     WHERE {clauses}
+                                     ORDER BY p.filename, s.slide_number""", tuple([f"%{t}%" for t in terms]))
+                    rows = [dict(r) for r in cur.fetchall()]
+        else:
+            rows = search_slides(qn, mode=mode_key)
+
         st.write(f"ヒット数: {len(rows)}")
-        for r in rows:
+
+if not rows:
+    st.caption("※ 見つからない場合は「keywords_like（部分一致）」や区切り文字（スペース/カンマ/読点）を確認してください。")
+for r in rows:
             st.markdown("---")
             st.markdown(f"**ファイル**: {r.get('filename')}　**スライド**: {r.get('slide_number')}")
             st.markdown("**抜粋テキスト**")

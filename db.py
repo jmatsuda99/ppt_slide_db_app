@@ -34,6 +34,19 @@ def insert_slide(presentation_id, slide_number, text_content, image_filenames):
         )
         return cur.lastrowid
 
+
+def _normalize(s: str) -> str:
+    import re, unicodedata
+    if s is None:
+        return ""
+    # Unicode NFKC normalize (full/half width, etc.)
+    s = unicodedata.normalize("NFKC", s)
+    # lower (mainly for ASCII)
+    s = s.lower()
+    # collapse whitespace (including Japanese spaces)
+    s = re.sub(r"[\s\u3000]+", " ", s)
+    return s.strip()
+
 def insert_keyword(slide_id, keyword, source):
     with get_conn() as conn:
         cur = conn.cursor()
